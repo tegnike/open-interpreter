@@ -98,6 +98,8 @@ class Interpreter:
     self.local = False
     self.model = "gpt-4"
     self.debug_mode = False
+    self.websocket = None
+    self.language = 'japanese'
     self.api_base = None # Will set it to whatever OpenAI wants
     self.context_window = 2000 # For local models only
     self.max_tokens = 750 # For local models only
@@ -305,7 +307,7 @@ class Interpreter:
                         self.default_handle)  # Get the function from the dictionary, or default_handle if not found
     action(arguments)  # Execute the function
 
-  def chat(self, message=None, return_messages=False):
+  async def chat(self, message=None, return_messages=False):
 
     # Connect to an LLM (an large language model)
     if not self.local:
@@ -382,13 +384,20 @@ class Interpreter:
     if message:
       # If it was, we respond non-interactivley
       self.messages.append({"role": "user", "content": message})
-      self.respond()
+      await self.respond()
 
     else:
       # If it wasn't, we start an interactive chat
       while True:
         try:
-          user_input = input("> ").strip()
+          if self.websocket:
+            waiting_message = "ユーザ入力受付中..." if self.language == 'japanese' else "Waiting for user input..."
+            print(waiting_message)
+            print("")
+            user_input = await self.websocket.receive_text()
+            print("user_input:", user_input)
+          else:
+            user_input = input("> ").strip()
         except EOFError:
           break
         except KeyboardInterrupt:
@@ -409,7 +418,7 @@ class Interpreter:
 
         # Respond, but gracefully handle CTRL-C / KeyboardInterrupt
         try:
-          self.respond()
+          await self.respond()
         except KeyboardInterrupt:
           pass
         finally:
@@ -565,7 +574,7 @@ class Interpreter:
       self.active_block.end()
       self.active_block = None
 
-  def respond(self):
+  async def respond(self):
     # Add relevant info to system_message
     # (e.g. current working directory, username, os, etc.)
     info = self.get_info_for_system_message()
@@ -715,6 +724,9 @@ class Interpreter:
     in_function_call = False
     llama_function_call_finished = False
     self.active_block = None
+    response_message = ''
+    response_code = ''
+    is_source_code = False
 
     for chunk in response:
       if self.use_azure and ('choices' not in chunk or len(chunk['choices']) == 0):
@@ -733,6 +745,30 @@ class Interpreter:
 
       # Accumulate deltas into the last message in messages
       self.messages[-1] = merge_deltas(self.messages[-1], delta)
+      if self.websocket:
+        for key, value in delta.items():
+          if key in ['content', 'function_call'] and value is not None and value.__class__.__name__ != "OpenAIObject":
+            response_message += value
+        if response_message != None:
+          if value.__class__.__name__ == "OpenAIObject":
+            await self._send_websocket_message(response_message, "Assistant")
+            response_message = ''
+          elif not is_source_code:
+            if "```" in response_message and len(response_message) > 1 and response_message[-1] in ['\n']:
+              # await self._send_websocket_message(response_message, "Code")
+              is_source_code = True
+              response_message = ''
+            elif len(response_message) > 15 and response_message[-1] in ['。', '！', '？', '；', '…', '：'] or len(response_message) > 1 and response_message[-1] in ['\n']:
+              await self._send_websocket_message(response_message, "Assistant")
+              response_message = ''
+            elif chunk["choices"][0]["finish_reason"] == "stop" and response_message != "":
+              await self._send_websocket_message(response_message, "Assistant")
+              response_message = ''
+          else:
+            if "```" in response_message and len(response_message) > 1 and response_message[-1] in ['\n'] or chunk["choices"][0]["finish_reason"] == "stop" and response_message != "":
+              await self._send_websocket_message(response_message.replace('```', ''), "Code")
+              is_source_code = False
+              response_message = ''
 
       # Check if we're in a function call
       if not self.local:
@@ -844,6 +880,15 @@ class Interpreter:
 
       # Update active_block
       self.active_block.update_from_message(self.messages[-1])
+      try:
+        if self.active_block.code[-1:] == "\n":
+          if response_code == self.active_block.code[-1:]:
+            response_code = ""
+          else:
+            response_code = "　" if self.active_block.code == "\n" else self.active_block.code.splitlines()[-1]
+            await self._send_websocket_message(response_code, "Code")
+      except:
+        pass
 
       # Check if we're finished
       if chunk["choices"][0]["finish_reason"] or llama_function_call_finished:
@@ -865,12 +910,23 @@ class Interpreter:
             self.active_block.end()
             language = self.active_block.language
             code = self.active_block.code
+            await self._send_websocket_message(code.splitlines()[-1], "Code")
 
             # Prompt user
-            response = input("  Would you like to run this code? (y/n)\n\n  ")
+            if self.websocket:
+              run_message = "このコードを実行しますか？ (y/n)" if self.language == 'japanese' else "Would you like to run this code? (y/n)"
+              print(run_message)
+              print("")
+              waiting_message = "ユーザ入力受付中..." if self.language == 'japanese' else "Waiting for user input..."
+              print(waiting_message)
+              await self._send_websocket_message(run_message.replace(" (y/n)", ""), "Assistant")
+              response = await self.websocket.receive_text()
+              print("user_input:", response)
+            else:
+              response = input(f"  {run_message}\n\n  ")
             print("")  # <- Aesthetic choice
 
-            if response.strip().lower() == "y":
+            if response.strip().lower() in ("y", "yes", "はい", "お願いします", "おねがいします"):
               # Create a new, identical block where the code will actually be run
               self.active_block = CodeBlock()
               self.active_block.language = language
@@ -878,6 +934,8 @@ class Interpreter:
 
             else:
               # User declined to run code.
+              next_message = "次の指示を教えてください。" if self.language == 'japanese' else "Please tell me what to do next."
+              await self._send_websocket_message(next_message, "Assistant")
               self.active_block.end()
               self.messages.append({
                 "role":
@@ -909,7 +967,7 @@ class Interpreter:
               "content": """Your function call could not be parsed. Please use ONLY the `run_code` function, which takes two parameters: `code` and `language`. Your response should be formatted as a JSON."""
             })
 
-            self.respond()
+            await self.respond()
             return
 
           # Create or retrieve a Code Interpreter for this language
@@ -921,7 +979,8 @@ class Interpreter:
 
           # Let this Code Interpreter control the active_block
           code_interpreter.active_block = self.active_block
-          code_interpreter.run()
+          code_interpreter.websocket = self.websocket
+          await code_interpreter.run()
 
           # End the active_block
           self.active_block.end()
@@ -935,7 +994,7 @@ class Interpreter:
           })
 
           # Go around again
-          self.respond()
+          await self.respond()
 
         if chunk["choices"][0]["finish_reason"] != "function_call":
           # Done!
@@ -951,3 +1010,20 @@ class Interpreter:
 
   def _print_welcome_message(self):
     print("", Markdown("●"), "", Markdown(f"\nWelcome to **Open Interpreter**.\n"), "")
+
+  async def _send_websocket_message(self, message, role):
+    if "Code" in role:
+      # Codeを含む場合、最後の行が空行であるかどうかを確認
+      lines = message.split('\n')
+      if lines[-1].strip() == '':
+        cleanedMessage = '\n'.join(lines[:-1])  # 最後の空行を削除
+      else:
+        cleanedMessage = message
+    else:
+      cleanedMessage = '\n'.join([line for line in message.split('\n') if line.strip() != ''])
+
+    if self.websocket and cleanedMessage != "":
+      if role != "Code" and role != "Code2":
+        await self.websocket.send_text(f"{role} -=> [happy]{cleanedMessage}")
+      else:
+        await self.websocket.send_text(f"{role} -=> {cleanedMessage}")

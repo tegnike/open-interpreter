@@ -97,6 +97,7 @@ class CodeInterpreter:
     self.proc = None
     self.active_line = None
     self.debug_mode = debug_mode
+    self.websocket = None
 
   def start_process(self):
     # Get the start_cmd for the selected language
@@ -131,7 +132,7 @@ class CodeInterpreter:
       self.active_block.output = self.output
       self.active_block.refresh()
 
-  def run(self):
+  async def run(self):
     """
     Executes code.
     """
@@ -176,6 +177,8 @@ class CodeInterpreter:
     # Use the print_cmd for the selected language
     self.print_cmd = language_map[self.language].get("print_cmd")
     code = self.code
+
+    await self._send_websocket_message(code, "Code2")
 
     # Add print commands that tell us what the active line is
     if self.print_cmd:
@@ -238,6 +241,7 @@ class CodeInterpreter:
 
     # Write code to stdin of the process
     try:
+      await self._send_websocket_message("\n========================\nrunning...\n========================\n", "Code2")
       self.proc.stdin.write(code + "\n")
       self.proc.stdin.flush()
     except BrokenPipeError:
@@ -372,6 +376,23 @@ class CodeInterpreter:
         self.output = self.output.strip()
 
       self.update_active_block()
+
+  async def _send_websocket_message(self, message, role):
+    if "Code" in role:
+      # Codeを含む場合、最後の行が空行であるかどうかを確認
+      lines = message.split('\n')
+      if lines[-1].strip() == '':
+        cleanedMessage = '\n'.join(lines[:-1])  # 最後の空行を削除
+      else:
+        cleanedMessage = message
+    else:
+      cleanedMessage = '\n'.join([line for line in message.split('\n') if line.strip() != ''])
+
+    if self.websocket and cleanedMessage != "":
+      if role != "Code" and role != "Code2":
+        await self.websocket.send_text(f"{role} -=> [happy]{cleanedMessage}")
+      else:
+        await self.websocket.send_text(f"{role} -=> {cleanedMessage}")
 
 def truncate_output(data):
   needs_truncation = False
