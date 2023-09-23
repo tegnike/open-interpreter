@@ -33,6 +33,7 @@ import platform
 import openai
 import litellm
 import pkg_resources
+import base64
 
 import getpass
 import requests
@@ -394,7 +395,7 @@ class Interpreter:
             waiting_message = "ユーザ入力受付中..." if self.language == 'japanese' else "Waiting for user input..."
             print(waiting_message)
             print("")
-            user_input = await self.websocket.receive_text()
+            user_input = await self._get_websocket_message()
             print("user_input:", user_input)
           else:
             user_input = input("> ").strip()
@@ -920,7 +921,7 @@ class Interpreter:
               waiting_message = "ユーザ入力受付中..." if self.language == 'japanese' else "Waiting for user input..."
               print(waiting_message)
               await self._send_websocket_message(run_message.replace(" (y/n)", ""), "Assistant")
-              response = await self.websocket.receive_text()
+              response = await self._get_websocket_message()
               print("user_input:", response)
             else:
               response = input(f"  {run_message}\n\n  ")
@@ -1027,3 +1028,43 @@ class Interpreter:
         await self.websocket.send_text(f"{role} -=> [happy]{cleanedMessage}")
       else:
         await self.websocket.send_text(f"{role} -=> {cleanedMessage}")
+
+  async def _get_websocket_message(self):
+    while True:
+      # メッセージを受け取る
+      data = await self.websocket.receive_text()
+      parsed_data = json.loads(data)
+      message_type = parsed_data.get("type")
+      if message_type == "chat":
+        # チャットメッセージの処理
+        return parsed_data.get("content")
+
+      elif message_type == "file":
+        # JSONデータをパースして、ファイル名とファイルデータを取得
+        file_name = parsed_data.get("fileName")
+        base64_data = parsed_data.get("fileData").split(",")[1]
+        file_data = base64.b64decode(base64_data)
+
+        # ファイルを保存するディレクトリを指定
+        directory = "./workspace"
+
+        # ディレクトリが存在しない場合、作成
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        # ファイルのフルパスを作成
+        file_path = os.path.join(directory, file_name)
+
+        # ファイルを保存
+        with open(file_path, "wb") as f:
+            f.write(file_data)
+
+        # メッセージを追加
+        self.messages.append({"role": "assistant", "content": f"{directory}/{file_name}にファイルを保存しました。"})
+
+        await self._send_websocket_message("ファイルを保存しました。", "Assistant")
+
+      else:
+        # 未知のメッセージタイプに対する処理
+        await self._send_websocket_message("不正な送信が送られたようです。", "Assistant")
+        return ''
