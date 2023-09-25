@@ -1035,7 +1035,7 @@ class Interpreter:
       data = await self.websocket.receive_text()
       parsed_data = json.loads(data)
       message_type = parsed_data.get("type")
-      if message_type == "chat":
+      if message_type == "chat" and parsed_data.get("content") != "":
         # チャットメッセージの処理
         return parsed_data.get("content")
 
@@ -1060,11 +1060,14 @@ class Interpreter:
             f.write(file_data)
 
         # メッセージを追加
-        self.messages.append({"role": "assistant", "content": f"{directory}/{file_name}にファイルを保存しました。"})
+        save_message = f"{directory}/{file_name}にファイルを保存しました。" if self.language == 'japanese' else f"Saved file to {directory}/{file_name}."
+        self.messages.append({"role": "assistant", "content": save_message})
 
-        await self._send_websocket_message("ファイルを保存しました。", "Assistant")
+        save_message = "ファイルを保存しました。" if self.language == 'japanese' else f"Saved file."
+        await self._send_websocket_message(save_message, "Assistant")
 
       else:
         # 未知のメッセージタイプに対する処理
-        await self._send_websocket_message("不正な送信が送られたようです。", "Assistant")
+        error_message = "不正な送信が送られたようです。" if self.language == 'japanese' else "An invalid message was sent."
+        await self._send_websocket_message(error_message, "Assistant")
         return ''
