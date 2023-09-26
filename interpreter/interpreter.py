@@ -1014,12 +1014,17 @@ class Interpreter:
 
   async def _send_websocket_message(self, message, role):
     if "code" in role:
-      # Codeを含む場合、最後の行が空行であるかどうかを確認
-      lines = message.split('\n')
-      if lines[-1].strip() == '':
-        cleanedMessage = '\n'.join(lines[:-1])  # 最後の空行を削除
-      else:
-        cleanedMessage = message
+      lines = message.split("\n")
+
+      # Remove empty lines at the beginning
+      while lines and lines[0] == "":
+        lines.pop(0)
+      # Remove empty lines at the end
+      while lines and lines[-1] == "":
+        lines.pop(-1)
+
+      # Join the lines back together
+      cleanedMessage = "\n".join(lines)
     else:
       cleanedMessage = '\n'.join([line for line in message.split('\n') if line.strip() != ''])
 
