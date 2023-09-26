@@ -752,22 +752,22 @@ class Interpreter:
             response_message += value
         if response_message != None:
           if value.__class__.__name__ == "OpenAIObject":
-            await self._send_websocket_message(response_message, "Assistant")
+            await self._send_websocket_message(response_message, "assistant")
             response_message = ''
           elif not is_source_code:
             if "```" in response_message and len(response_message) > 1 and response_message[-1] in ['\n']:
-              # await self._send_websocket_message(response_message, "Code")
+              # await self._send_websocket_message(response_message, "code")
               is_source_code = True
               response_message = ''
             elif len(response_message) > 15 and response_message[-1] in ['。', '！', '？', '；', '…', '：'] or len(response_message) > 1 and response_message[-1] in ['\n']:
-              await self._send_websocket_message(response_message, "Assistant")
+              await self._send_websocket_message(response_message, "assistant")
               response_message = ''
             elif chunk["choices"][0]["finish_reason"] == "stop" and response_message != "":
-              await self._send_websocket_message(response_message, "Assistant")
+              await self._send_websocket_message(response_message, "assistant")
               response_message = ''
           else:
             if "```" in response_message and len(response_message) > 1 and response_message[-1] in ['\n'] or chunk["choices"][0]["finish_reason"] == "stop" and response_message != "":
-              await self._send_websocket_message(response_message.replace('```', ''), "Code")
+              await self._send_websocket_message(response_message.replace('```', ''), "code")
               is_source_code = False
               response_message = ''
 
@@ -887,7 +887,7 @@ class Interpreter:
             response_code = ""
           else:
             response_code = "　" if self.active_block.code == "\n" else self.active_block.code.splitlines()[-1]
-            await self._send_websocket_message(response_code, "Code")
+            await self._send_websocket_message(response_code, "code")
       except:
         pass
 
@@ -911,7 +911,7 @@ class Interpreter:
             self.active_block.end()
             language = self.active_block.language
             code = self.active_block.code
-            await self._send_websocket_message(code.splitlines()[-1], "Code")
+            await self._send_websocket_message(code.splitlines()[-1], "code")
 
             # Prompt user
             if self.websocket:
@@ -920,7 +920,7 @@ class Interpreter:
               print("")
               waiting_message = "ユーザ入力受付中..." if self.language == 'japanese' else "Waiting for user input..."
               print(waiting_message)
-              await self._send_websocket_message(run_message.replace(" (y/n)", ""), "Assistant")
+              await self._send_websocket_message(run_message.replace(" (y/n)", ""), "assistant")
               response = await self._get_websocket_message()
               print("user_input:", response)
             else:
@@ -936,7 +936,7 @@ class Interpreter:
             else:
               # User declined to run code.
               next_message = "次の指示を教えてください。" if self.language == 'japanese' else "Please tell me what to do next."
-              await self._send_websocket_message(next_message, "Assistant")
+              await self._send_websocket_message(next_message, "assistant")
               self.active_block.end()
               self.messages.append({
                 "role":
@@ -1013,7 +1013,7 @@ class Interpreter:
     print("", Markdown("●"), "", Markdown(f"\nWelcome to **Open Interpreter**.\n"), "")
 
   async def _send_websocket_message(self, message, role):
-    if "Code" in role:
+    if "code" in role:
       # Codeを含む場合、最後の行が空行であるかどうかを確認
       lines = message.split('\n')
       if lines[-1].strip() == '':
@@ -1024,10 +1024,8 @@ class Interpreter:
       cleanedMessage = '\n'.join([line for line in message.split('\n') if line.strip() != ''])
 
     if self.websocket and cleanedMessage != "":
-      if role != "Code" and role != "Code2":
-        await self.websocket.send_text(f"{role} -=> [happy]{cleanedMessage}")
-      else:
-        await self.websocket.send_text(f"{role} -=> {cleanedMessage}")
+      json_data = json.dumps({"role": role, "text": cleanedMessage})
+      await self.websocket.send({"type": "websocket.send", "text": json_data})
 
   async def _get_websocket_message(self):
     while True:
@@ -1064,10 +1062,10 @@ class Interpreter:
         self.messages.append({"role": "assistant", "content": save_message})
 
         save_message = "ファイルを保存しました。" if self.language == 'japanese' else f"Saved file."
-        await self._send_websocket_message(save_message, "Assistant")
+        await self._send_websocket_message(save_message, "assistant")
 
       else:
         # 未知のメッセージタイプに対する処理
         error_message = "不正な送信が送られたようです。" if self.language == 'japanese' else "An invalid message was sent."
-        await self._send_websocket_message(error_message, "Assistant")
+        await self._send_websocket_message(error_message, "assistant")
         return ''

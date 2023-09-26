@@ -29,6 +29,7 @@ import ast
 import sys
 import os
 import re
+import json
 
 
 def run_html(html_content):
@@ -178,7 +179,7 @@ class CodeInterpreter:
     self.print_cmd = language_map[self.language].get("print_cmd")
     code = self.code
 
-    await self._send_websocket_message(code, "Code2")
+    await self._send_websocket_message(code, "code2")
 
     # Add print commands that tell us what the active line is
     if self.print_cmd:
@@ -241,7 +242,7 @@ class CodeInterpreter:
 
     # Write code to stdin of the process
     try:
-      await self._send_websocket_message("\n========================\nrunning...\n========================\n", "Code2")
+      await self._send_websocket_message("\n========================\nrunning...\n========================\n", "code2")
       self.proc.stdin.write(code + "\n")
       self.proc.stdin.flush()
     except BrokenPipeError:
@@ -378,7 +379,7 @@ class CodeInterpreter:
       self.update_active_block()
 
   async def _send_websocket_message(self, message, role):
-    if "Code" in role:
+    if "code" in role:
       # Codeを含む場合、最後の行が空行であるかどうかを確認
       lines = message.split('\n')
       if lines[-1].strip() == '':
@@ -389,10 +390,8 @@ class CodeInterpreter:
       cleanedMessage = '\n'.join([line for line in message.split('\n') if line.strip() != ''])
 
     if self.websocket and cleanedMessage != "":
-      if role != "Code" and role != "Code2":
-        await self.websocket.send_text(f"{role} -=> [happy]{cleanedMessage}")
-      else:
-        await self.websocket.send_text(f"{role} -=> {cleanedMessage}")
+      json_data = json.dumps({"role": role, "text": cleanedMessage})
+      await self.websocket.send({"type": "websocket.send", "text": json_data})
 
 def truncate_output(data):
   needs_truncation = False
